@@ -62,6 +62,13 @@ x-cgroup-mount: &cgroup-mount
   target: /sys/fs/cgroup
   read_only: false
 
+# Installation scripts of this project -> /opt/scripts (read-only)
+x-scripts-mount: &scripts-mount
+  type: bind
+  source: ./scripts
+  target: /opt/scripts
+  read_only: true
+
 # Windows host folder with the binaries -> /opt/binary (read-only)
 x-binary-mount: &binary-mount
   type: bind
@@ -92,6 +99,7 @@ services:
     volumes:
       - *binary-mount
       - *cgroup-mount
+      - *scripts-mount
       - db_data:/var/lib/postgresql
       - db_conf:/etc/postgresql
       - db_log:/var/log/postgresql
@@ -125,6 +133,7 @@ services:
     volumes:
       - *binary-mount
       - *cgroup-mount
+      - *scripts-mount
       - nexus_app:/opt/sonatype          # nexus-<version>/ + sonatype-work/
       - nexus_systemd:/etc/systemd/system
     networks:
@@ -155,6 +164,7 @@ services:
     volumes:
       - *binary-mount
       - *cgroup-mount
+      - *scripts-mount
       - rabbitmq_data:/var/lib/rabbitmq   # mnesia + .erlang.cookie
       - rabbitmq_conf:/etc/rabbitmq
       - rabbitmq_log:/var/log/rabbitmq
@@ -189,6 +199,7 @@ services:
     volumes:
       - *binary-mount
       - *cgroup-mount
+      - *scripts-mount
       - tac_app:/opt/talend
       - tac_systemd:/etc/systemd/system
     networks:
@@ -224,6 +235,7 @@ services:
     volumes:
       - *binary-mount
       - *cgroup-mount
+      - *scripts-mount
       - jobserver_app:/opt/talend
       - jobserver_systemd:/etc/systemd/system
     networks:
@@ -263,6 +275,7 @@ services:
     volumes:
       - *binary-mount
       - *cgroup-mount
+      - *scripts-mount
       - runtime_app:/opt/talend
       - runtime_systemd:/etc/systemd/system
     networks:

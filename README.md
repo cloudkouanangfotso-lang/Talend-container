@@ -24,6 +24,8 @@ docker-compose.yml
 docker/Dockerfile       <- multi-stage: systemd-base | java | postgres
 docker/rootfs/          <- boot helper exporting compose env vars to login shells
 docker/certs/           <- optional corporate proxy CA (*.crt), trusted at build time
+scripts/                <- installation scripts, mounted read-only at /opt/scripts
+  vm_tac/install_tac.sh <- Java 21 + Tomcat 11.0.29 + systemd + TAC war as ROOT
 ```
 
 ## Prerequisites (Windows docker host)
@@ -103,6 +105,49 @@ automatically each time the container starts.
 > fully installed container, run `docker commit vm_db talend-dsp/vm_db:installed`
 > and point `image:` at it. Talend and Nexus products under `/opt` are not affected.
 
+## Automated TAC installation (`vm_tac`)
+
+`scripts/vm_tac/install_tac.sh` runs **inside** `vm_tac`, as root:
+
+```bash
+docker exec -it vm_tac bash /opt/scripts/vm_tac/install_tac.sh
+```
+
+| Step | Result |
+|------|--------|
+| 1. Java 21 (Eclipse Temurin, latest 21 GA, SHA-256 checked) | `/opt/talend/java/jdk-21.x` with symlink `/opt/talend/java/jdk21` |
+| 2. `JAVA_HOME` + `PATH` for `talend` | block in `~talend/.profile` and `~talend/.bashrc` |
+| 3. Apache Tomcat 11.0.29 (SHA-512 checked) | `/opt/talend/tac/apache-tomcat-11.0.29` with symlink `/opt/talend/tac/tomcat`; default webapps removed; `bin/setenv.sh` (JAVA_HOME, heap) |
+| 4. TAC war from `$BINARY_PATH/$BINARY_TAC` | exploded as `webapps/ROOT`, so TAC answers on `http://localhost:8080/` |
+| 5. systemd | `/etc/systemd/system/talend-tac.service`, `User=talend`, `Group=talend`, enabled and started |
+
+Everything goes under `/opt/talend` (volume `tac_app`) and `/etc/systemd/system`
+(volume `tac_systemd`), so the installation survives `docker compose down` / `up`.
+Java 21 is installed from a tarball for that reason (an apt package in `/usr` would be lost).
+
+Options and variables:
+
+```bash
+docker exec -it vm_tac bash /opt/scripts/vm_tac/install_tac.sh --no-start
+```
+
+```bash
+docker exec -it -e TAC_XMX=6g vm_tac bash /opt/scripts/vm_tac/install_tac.sh --force
+```
+
+* `--no-start`: install and enable the service without starting it. `--force`:
+  reinstall Java and Tomcat. The war is always redeployed, which **overwrites**
+  `WEB-INF/classes/configuration.properties`, so back it up before re-running
+  on a configured TAC.
+* Variables: `JAVA_MAJOR` (21), `TOMCAT_VERSION` (11.0.29), `TAC_HTTP_PORT` (8080),
+  `TAC_XMS` (1g), `TAC_XMX` (4g), `SERVICE_NAME` (talend-tac), `TAC_USER`/`TAC_GROUP` (talend).
+* **Offline:** if `OpenJDK21U-jdk_x64_linux_hotspot_*.tar.gz` and/or
+  `apache-tomcat-11.0.29.tar.gz` are in the binaries folder, they are used
+  instead of downloading.
+
+Service management: `systemctl status|restart talend-tac`, logs with
+`journalctl -u talend-tac -f` and `/opt/talend/tac/tomcat/logs`.
+
 ## Network and traffic
 
 * **Container to container**: by container name (`vm_db`) or by hostname/alias
@@ -115,7 +160,7 @@ automatically each time the container starts.
 
 | Service                     | Host port (default) |
 |-----------------------------|---------------------|
-| TAC                         | http://localhost:8080/org.talend.administrator |
+| TAC (ROOT application)      | http://localhost:8080/ |
 | JobServer cmd / file / monitor / process | 8000 / 8001 / 8888 / 8555 |
 | Runtime HTTP / HTTPS / SSH  | 8040 / 9001 / 8101 |
 | Runtime RMI / RMI server / JMS | 1099 / 44444 / 61616 |
