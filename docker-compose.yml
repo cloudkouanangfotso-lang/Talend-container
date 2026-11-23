@@ -54,6 +54,14 @@ x-common-env: &common-env
   BINARY_RUNTIME: ${BINARY_RUNTIME}
   HOST_DOCKER: host.docker.internal
 
+# Real cgroup v2 filesystem of the host, writable, required by systemd.
+# Without it systemd stops with "Cannot determine cgroup ... No medium found".
+x-cgroup-mount: &cgroup-mount
+  type: bind
+  source: /sys/fs/cgroup
+  target: /sys/fs/cgroup
+  read_only: false
+
 # Windows host folder with the binaries -> /opt/binary (read-only)
 x-binary-mount: &binary-mount
   type: bind
@@ -83,6 +91,7 @@ services:
       - "${HOST_BIND_IP:-0.0.0.0}:${HOST_PORT_DB:-5432}:5432"
     volumes:
       - *binary-mount
+      - *cgroup-mount
       - db_data:/var/lib/postgresql
       - db_conf:/etc/postgresql
       - db_log:/var/log/postgresql
@@ -115,6 +124,7 @@ services:
       - "${HOST_BIND_IP:-0.0.0.0}:${HOST_PORT_NEXUS_HTTP:-8081}:8081"
     volumes:
       - *binary-mount
+      - *cgroup-mount
       - nexus_app:/opt/sonatype          # nexus-<version>/ + sonatype-work/
       - nexus_systemd:/etc/systemd/system
     networks:
@@ -144,6 +154,7 @@ services:
       - "${HOST_BIND_IP:-0.0.0.0}:${HOST_PORT_RABBITMQ_MGMT:-15672}:15672"
     volumes:
       - *binary-mount
+      - *cgroup-mount
       - rabbitmq_data:/var/lib/rabbitmq   # mnesia + .erlang.cookie
       - rabbitmq_conf:/etc/rabbitmq
       - rabbitmq_log:/var/log/rabbitmq
@@ -177,6 +188,7 @@ services:
       - "${HOST_BIND_IP:-0.0.0.0}:${HOST_PORT_TAC_HTTPS:-8443}:8443"
     volumes:
       - *binary-mount
+      - *cgroup-mount
       - tac_app:/opt/talend
       - tac_systemd:/etc/systemd/system
     networks:
@@ -211,6 +223,7 @@ services:
       - "${HOST_BIND_IP:-0.0.0.0}:${HOST_PORT_JS_PROCESS:-8555}:8555"
     volumes:
       - *binary-mount
+      - *cgroup-mount
       - jobserver_app:/opt/talend
       - jobserver_systemd:/etc/systemd/system
     networks:
@@ -249,6 +262,7 @@ services:
       - "${HOST_BIND_IP:-0.0.0.0}:${HOST_PORT_RT_JS_MONITOR:-8889}:8888"
     volumes:
       - *binary-mount
+      - *cgroup-mount
       - runtime_app:/opt/talend
       - runtime_systemd:/etc/systemd/system
     networks:

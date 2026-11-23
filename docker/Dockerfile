@@ -74,7 +74,8 @@ RUN mkdir -p /opt/binary
 
 # systemd must receive SIGRTMIN+3 to shut down cleanly
 STOPSIGNAL SIGRTMIN+3
-VOLUME ["/sys/fs/cgroup"]
+# NOTE: never declare VOLUME /sys/fs/cgroup here: it would hide the real cgroup
+# filesystem behind an empty volume and systemd fails with "No medium found".
 CMD ["/sbin/init"]
 
 # -----------------------------------------------------------------------------

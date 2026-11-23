@@ -151,3 +151,46 @@ docker run --rm -v talend-dsp_tac_app:/data -v "${PWD}:/backup" debian:trixie ta
 * Java version: `JAVA_VERSION=17` in `.env` (21 is possible on recent Talend 8
   patches). Rebuild with `docker compose build`.
 * `nofile` is raised to 65536 (required by Nexus and recommended for Talend).
+
+## Troubleshooting
+
+### Container restarts in a loop: `Cannot determine cgroup we are running in: No medium found`
+
+systemd cannot see a writable **cgroup v2** filesystem at `/sys/fs/cgroup`.
+
+1. Rebuild and recreate the containers (the compose file bind-mounts
+   `/sys/fs/cgroup` read-write and the images must not declare a volume on it):
+
+   ```bash
+   docker compose down
+   ```
+
+   ```bash
+   docker compose up -d --build --force-recreate --renew-anon-volumes
+   ```
+
+   (`down` without `-v` keeps your named volumes.)
+
+2. Check that the engine uses cgroup v2. In PowerShell:
+
+   ```bash
+   docker info --format "{{.CgroupVersion}}"
+   ```
+
+   It must print `2`. If it prints `1` (typical when Docker Engine runs inside a
+   WSL distro with an old WSL configuration), force cgroup v2 in
+   `%UserProfile%\.wslconfig` on Windows:
+
+   ```ini
+   [wsl2]
+   kernelCommandLine = cgroup_no_v1=all systemd.unified_cgroup_hierarchy=1
+   ```
+
+   Then restart WSL and Docker:
+
+   ```bash
+   wsl --shutdown
+   ```
+
+`Failed to initialize kmod context: Operation not supported` is harmless:
+containers cannot load kernel modules.
