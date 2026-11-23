@@ -1,0 +1,20 @@
+#!/bin/sh
+# Copy the variables given by docker-compose (environment:) from PID 1 into
+# /etc/profile.d so they are visible in every login shell (su - talend, ssh...)
+# and in /etc/environment for systemd units using EnvironmentFile=.
+set -eu
+OUT_SH=/etc/profile.d/container-env.sh
+OUT_ENV=/etc/container-env
+PATTERN='^(BINARY_|TAC_|JOBSERVER_|RUNTIME_|NEXUS_|RABBITMQ_|DB_|APP_|HOST_|TZ=)'
+
+tr '\0' '\n' < /proc/1/environ | grep -E "$PATTERN" > "$OUT_ENV" || true
+chmod 0644 "$OUT_ENV"
+
+{
+  echo "# Generated at boot by container-env-export.service - do not edit"
+  while IFS= read -r line; do
+    name=${line%%=*}; value=${line#*=}
+    printf "export %s='%s'\n" "$name" "$(printf '%s' "$value" | sed "s/'/'\\\\''/g")"
+  done < "$OUT_ENV"
+} > "$OUT_SH"
+chmod 0644 "$OUT_SH"

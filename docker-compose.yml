@@ -1,0 +1,289 @@
+# =============================================================================
+#  Talend Data Services Platform - containers on Debian 13 (trixie)
+#
+#  Containers act like VMs: systemd is PID 1. Nothing is installed: you
+#  install TAC, JobServer, Runtime, Nexus, RabbitMQ and PostgreSQL 18 yourself
+#  and enable them with systemctl.
+#
+#  All tunables live in .env
+# =============================================================================
+
+name: ${COMPOSE_PROJECT_NAME:-talend-dsp}
+
+# -----------------------------------------------------------------------------
+# Common settings shared by every container
+# -----------------------------------------------------------------------------
+x-systemd-vm: &systemd-vm
+  restart: unless-stopped
+  init: false                      # systemd is the init (PID 1)
+  tty: true
+  stop_signal: SIGRTMIN+3
+  stop_grace_period: 2m            # let systemd stop the applications cleanly
+  # systemd needs to manage cgroups. "privileged" is the most reliable option
+  # on Docker Desktop (WSL2 / cgroup v2). For a tighter setup replace it with:
+  #   cap_add: [SYS_ADMIN]
+  #   security_opt: [seccomp:unconfined, apparmor:unconfined]
+  privileged: true
+  cgroup: host
+  tmpfs:
+    - /run
+    - /run/lock
+    - /tmp:exec,mode=1777
+  extra_hosts:
+    # Reach the docker host from any container: host.docker.internal
+    # (native on Docker Desktop, required on a Linux engine)
+    - "host.docker.internal:host-gateway"
+  ulimits:
+    nofile: { soft: 65536, hard: 65536 }
+    nproc:  { soft: 8192,  hard: 8192 }
+  logging:
+    driver: json-file
+    options: { max-size: "20m", max-file: "5" }
+
+x-build-args: &build-args
+  DEBIAN_IMAGE: ${DEBIAN_IMAGE:-debian:trixie}
+  TZ: ${TZ:-Europe/Paris}
+  LOCALE: ${LOCALE:-en_US.UTF-8}
+  JAVA_VERSION: ${JAVA_VERSION:-17}
+
+x-common-env: &common-env
+  TZ: ${TZ:-Europe/Paris}
+  BINARY_PATH: ${BINARY_CONTAINER_PATH:-/opt/binary}
+  BINARY_TAC: ${BINARY_TAC}
+  BINARY_JOBSERVER: ${BINARY_JOBSERVER}
+  BINARY_RUNTIME: ${BINARY_RUNTIME}
+  HOST_DOCKER: host.docker.internal
+
+# Windows host folder with the binaries -> /opt/binary (read-only)
+x-binary-mount: &binary-mount
+  type: bind
+  source: ${BINARY_HOST_PATH:?Set BINARY_HOST_PATH in .env}
+  target: ${BINARY_CONTAINER_PATH:-/opt/binary}
+  read_only: true
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # Talend Administration Center database - PostgreSQL 18
+  # ---------------------------------------------------------------------------
+  vm_db:
+    <<: *systemd-vm
+    container_name: vm_db
+    hostname: vm-db
+    image: talend-dsp/vm_db:debian13
+    build:
+      context: ./docker
+      target: postgres
+      args: *build-args
+    shm_size: 512m
+    environment:
+      <<: *common-env
+      DB_PORT: "5432"
+    ports:
+      - "${HOST_BIND_IP:-0.0.0.0}:${HOST_PORT_DB:-5432}:5432"
+    volumes:
+      - *binary-mount
+      - db_data:/var/lib/postgresql
+      - db_conf:/etc/postgresql
+      - db_log:/var/log/postgresql
+      - db_systemd:/etc/systemd/system
+    networks:
+      talend_net:
+        ipv4_address: ${IP_DB:-172.28.10.10}
+        aliases: [db, vm-db, tacdb]
+
+  # ---------------------------------------------------------------------------
+  # Sonatype Nexus Repository
+  # ---------------------------------------------------------------------------
+  vm_nexus:
+    <<: *systemd-vm
+    container_name: vm_nexus
+    hostname: vm-nexus
+    image: talend-dsp/vm_nexus:debian13
+    build:
+      context: ./docker
+      target: java
+      args:
+        <<: *build-args
+        APP_USER: ${NEXUS_USER:-nexus}
+        APP_UID: ${NEXUS_UID:-1002}
+        APP_HOME: /opt/sonatype
+    environment:
+      <<: *common-env
+      NEXUS_HOME: /opt/sonatype
+    ports:
+      - "${HOST_BIND_IP:-0.0.0.0}:${HOST_PORT_NEXUS_HTTP:-8081}:8081"
+    volumes:
+      - *binary-mount
+      - nexus_app:/opt/sonatype          # nexus-<version>/ + sonatype-work/
+      - nexus_systemd:/etc/systemd/system
+    networks:
+      talend_net:
+        ipv4_address: ${IP_NEXUS:-172.28.10.11}
+        aliases: [nexus, vm-nexus]
+
+  # ---------------------------------------------------------------------------
+  # RabbitMQ
+  #   The hostname is fixed: RabbitMQ node name is rabbit@vm-rabbitmq and
+  #   its data directory depends on it.
+  # ---------------------------------------------------------------------------
+  vm_rabbitmq:
+    <<: *systemd-vm
+    container_name: vm_rabbitmq
+    hostname: vm-rabbitmq
+    image: talend-dsp/vm_rabbitmq:debian13
+    build:
+      context: ./docker
+      target: systemd-base
+      args: *build-args
+    environment:
+      <<: *common-env
+    ports:
+      - "${HOST_BIND_IP:-0.0.0.0}:${HOST_PORT_RABBITMQ_AMQP:-5672}:5672"
+      - "${HOST_BIND_IP:-0.0.0.0}:${HOST_PORT_RABBITMQ_AMQPS:-5671}:5671"
+      - "${HOST_BIND_IP:-0.0.0.0}:${HOST_PORT_RABBITMQ_MGMT:-15672}:15672"
+    volumes:
+      - *binary-mount
+      - rabbitmq_data:/var/lib/rabbitmq   # mnesia + .erlang.cookie
+      - rabbitmq_conf:/etc/rabbitmq
+      - rabbitmq_log:/var/log/rabbitmq
+      - rabbitmq_systemd:/etc/systemd/system
+    networks:
+      talend_net:
+        ipv4_address: ${IP_RABBITMQ:-172.28.10.12}
+        aliases: [rabbitmq, vm-rabbitmq]
+
+  # ---------------------------------------------------------------------------
+  # Talend Administration Center
+  # ---------------------------------------------------------------------------
+  vm_tac:
+    <<: *systemd-vm
+    container_name: vm_tac
+    hostname: vm-tac
+    image: talend-dsp/vm_tac:debian13
+    build:
+      context: ./docker
+      target: java
+      args:
+        <<: *build-args
+        APP_USER: ${TALEND_USER:-talend}
+        APP_UID: ${TALEND_UID:-1001}
+        APP_HOME: /opt/talend
+    environment:
+      <<: *common-env
+      TAC_HOME: /opt/talend/tac
+    ports:
+      - "${HOST_BIND_IP:-0.0.0.0}:${HOST_PORT_TAC_HTTP:-8080}:8080"
+      - "${HOST_BIND_IP:-0.0.0.0}:${HOST_PORT_TAC_HTTPS:-8443}:8443"
+    volumes:
+      - *binary-mount
+      - tac_app:/opt/talend
+      - tac_systemd:/etc/systemd/system
+    networks:
+      talend_net:
+        ipv4_address: ${IP_TAC:-172.28.10.20}
+        aliases: [tac, vm-tac]
+    depends_on: [vm_db, vm_nexus, vm_rabbitmq]
+
+  # ---------------------------------------------------------------------------
+  # Talend JobServer
+  # ---------------------------------------------------------------------------
+  vm_jobserver:
+    <<: *systemd-vm
+    container_name: vm_jobserver
+    hostname: vm-jobserver
+    image: talend-dsp/vm_jobserver:debian13
+    build:
+      context: ./docker
+      target: java
+      args:
+        <<: *build-args
+        APP_USER: ${TALEND_USER:-talend}
+        APP_UID: ${TALEND_UID:-1001}
+        APP_HOME: /opt/talend
+    environment:
+      <<: *common-env
+      JOBSERVER_HOME: /opt/talend/jobserver
+    ports:
+      - "${HOST_BIND_IP:-0.0.0.0}:${HOST_PORT_JS_COMMAND:-8000}:8000"
+      - "${HOST_BIND_IP:-0.0.0.0}:${HOST_PORT_JS_FILE:-8001}:8001"
+      - "${HOST_BIND_IP:-0.0.0.0}:${HOST_PORT_JS_MONITOR:-8888}:8888"
+      - "${HOST_BIND_IP:-0.0.0.0}:${HOST_PORT_JS_PROCESS:-8555}:8555"
+    volumes:
+      - *binary-mount
+      - jobserver_app:/opt/talend
+      - jobserver_systemd:/etc/systemd/system
+    networks:
+      talend_net:
+        ipv4_address: ${IP_JOBSERVER:-172.28.10.21}
+        aliases: [jobserver, vm-jobserver]
+
+  # ---------------------------------------------------------------------------
+  # Talend Runtime (ESB / Karaf)
+  # ---------------------------------------------------------------------------
+  vm_runtime:
+    <<: *systemd-vm
+    container_name: vm_runtime
+    hostname: vm-runtime
+    image: talend-dsp/vm_runtime:debian13
+    build:
+      context: ./docker
+      target: java
+      args:
+        <<: *build-args
+        APP_USER: ${TALEND_USER:-talend}
+        APP_UID: ${TALEND_UID:-1001}
+        APP_HOME: /opt/talend
+    environment:
+      <<: *common-env
+      RUNTIME_HOME: /opt/talend/runtime
+    ports:
+      - "${HOST_BIND_IP:-0.0.0.0}:${HOST_PORT_RT_HTTP:-8040}:8040"
+      - "${HOST_BIND_IP:-0.0.0.0}:${HOST_PORT_RT_HTTPS:-9001}:9001"
+      - "${HOST_BIND_IP:-0.0.0.0}:${HOST_PORT_RT_SSH:-8101}:8101"
+      - "${HOST_BIND_IP:-0.0.0.0}:${HOST_PORT_RT_RMI_REGISTRY:-1099}:1099"
+      - "${HOST_BIND_IP:-0.0.0.0}:${HOST_PORT_RT_RMI_SERVER:-44444}:44444"
+      - "${HOST_BIND_IP:-0.0.0.0}:${HOST_PORT_RT_JMS:-61616}:61616"
+      - "${HOST_BIND_IP:-0.0.0.0}:${HOST_PORT_RT_JS_COMMAND:-8100}:8000"
+      - "${HOST_BIND_IP:-0.0.0.0}:${HOST_PORT_RT_JS_FILE:-8102}:8001"
+      - "${HOST_BIND_IP:-0.0.0.0}:${HOST_PORT_RT_JS_MONITOR:-8889}:8888"
+    volumes:
+      - *binary-mount
+      - runtime_app:/opt/talend
+      - runtime_systemd:/etc/systemd/system
+    networks:
+      talend_net:
+        ipv4_address: ${IP_RUNTIME:-172.28.10.22}
+        aliases: [runtime, vm-runtime]
+
+# -----------------------------------------------------------------------------
+networks:
+  talend_net:
+    name: ${NETWORK_NAME:-talend_net}
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${NETWORK_SUBNET:-172.28.10.0/24}
+          gateway: ${NETWORK_GATEWAY:-172.28.10.1}
+
+# -----------------------------------------------------------------------------
+# Named volumes: survive "docker compose down" and image rebuilds.
+# Only "docker compose down -v" deletes them.
+# -----------------------------------------------------------------------------
+volumes:
+  db_data:
+  db_conf:
+  db_log:
+  db_systemd:
+  nexus_app:
+  nexus_systemd:
+  rabbitmq_data:
+  rabbitmq_conf:
+  rabbitmq_log:
+  rabbitmq_systemd:
+  tac_app:
+  tac_systemd:
+  jobserver_app:
+  jobserver_systemd:
+  runtime_app:
+  runtime_systemd:

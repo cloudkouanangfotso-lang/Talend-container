@@ -1,0 +1,13 @@
+[Unit]
+Description=Export docker-compose environment variables to login shells
+DefaultDependencies=no
+After=local-fs.target
+Before=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/container-env-export
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
