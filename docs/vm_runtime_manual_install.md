@@ -268,7 +268,7 @@ sed -i -E 's|^[[:space:]]*#?[[:space:]]*(sshHost)[[:space:]]*=.*|\1 = 0.0.0.0|' 
 sed -i -E 's|^[[:space:]]*#?[[:space:]]*(rmiRegistryPort)[[:space:]]*=.*|\1 = 1099|' etc/org.apache.karaf.management.cfg
 sed -i -E 's|^[[:space:]]*#?[[:space:]]*(rmiServerPort)[[:space:]]*=.*|\1 = 44444|' etc/org.apache.karaf.management.cfg
 sed -i -E 's|^[[:space:]]*#?[[:space:]]*(rmiRegistryHost)[[:space:]]*=.*|\1 = 0.0.0.0|' etc/org.apache.karaf.management.cfg
-sed -i -E 's|^[[:space:]]*#?[[:space:]]*(rmiServerHost)[[:space:]]*=.*|\1 = 0.0.0.0|' etc/org.apache.karaf.management.cfg
+sed -i -E 's|^[[:space:]]*#?[[:space:]]*(rmiServerHost)[[:space:]]*=.*|\1 = vm-runtime|' etc/org.apache.karaf.management.cfg
 ```
 
 * `sed -i -E 's|…|…|'` edits in place with extended regular expressions. `|` is used as
@@ -278,9 +278,16 @@ sed -i -E 's|^[[:space:]]*#?[[:space:]]*(rmiServerHost)[[:space:]]*=.*|\1 = 0.0.
   Dots in key names are escaped (`\.`), because `.` alone means "any character".
 * The ports are the Karaf/Talend defaults, the same ones docker compose publishes.
   Only change them together with `docker-compose.yml` / `.env`.
-* **`0.0.0.0` (all interfaces) for SSH and JMX:** Karaf 4 binds JMX to `127.0.0.1` by
-  default, which other containers and the docker host cannot reach. TAC needs JMX to
-  monitor the Runtime. HTTP (Pax Web) already listens on all interfaces.
+* **SSH and the JMX registry on `0.0.0.0` (all interfaces):** Karaf 4 binds JMX to
+  `127.0.0.1` by default, which other containers and the docker host cannot reach.
+  TAC needs JMX to monitor the Runtime. HTTP (Pax Web) already listens on all interfaces.
+* **The JMX/RMI server (`rmiServerHost`) on `vm-runtime`, not `0.0.0.0`.** A JMX client
+  connects twice: first to the registry (1099), which answers with the address of the
+  RMI server, then to that address (44444). Karaf gives out the `rmiServerHost` value.
+  With `0.0.0.0` the client would try to connect to `0.0.0.0` and fail with
+  `Connection refused to host: 0.0.0.0`. `vm-runtime` (the container's host name) is
+  resolved by every container, and Karaf then listens on the container's IP.
+  **Never use `vm_runtime`:** Java refuses host names containing `_`.
 * A key that is not in your file is simply not changed. Do not add keys this version
   does not know.
 
@@ -444,7 +451,7 @@ ss -ltnp | grep -E ':(8040|8101|1099|44444) '
 
 * Ports 8040 (HTTP), 8101 (SSH) and 1099 (JMX) must show a `java` process. The first
   start can take one or two minutes. Run it again if a port is still missing.
-* `0.0.0.0:1099` (not `127.0.0.1:1099`) confirms that 4.2 worked.
+* `0.0.0.0:1099` (not `127.0.0.1:1099`) and `<container IP>:44444` confirm that 4.2 worked.
 
 ```bash
 tr '\0' '\n' < /proc/$(pgrep -n -u talend java)/cmdline | grep -E '^-Xm[sx]'
@@ -497,10 +504,19 @@ rm -rf /tmp/rt-install
 
 ### In TAC
 
-In TAC (**ESB Conductor**, **ESB Infrastructure**), declare the Runtime with host
-`vm-runtime` (hyphen, not `_`), SSH port 8101 and JMX port 1099, and the `tadmin`
-user. ESB Conductor deploys features from **Nexus**, so the Runtime must also be able
-to reach `vm-nexus:8081`.
+In TAC (**Servers**, Runtime server; **ESB Conductor**), declare the Runtime with:
+
+| Field | Value |
+|---|---|
+| Host | `vm-runtime` (hyphen). **Never `vm_runtime`**: Java refuses `_` (`Bad URL path`) |
+| JMX port / RMI server port | 1099 / 44444 |
+| JMX service name | `karaf-trun` |
+| JMX URL (if TAC asks for the full URL) | `service:jmx:rmi://vm-runtime:44444/jndi/rmi://vm-runtime:1099/karaf-trun` |
+| SSH port | 8101 |
+| User / password | `tadmin` / the password from Step 5 |
+
+ESB Conductor deploys features from **Nexus**, so the Runtime must also be able to
+reach `vm-nexus:8081`.
 
 ---
 
@@ -555,3 +571,44 @@ sh -n bin/setenv && systemctl restart talend-runtime && sleep 10 && systemctl is
 ```
 
 Expected: `active`. Then go through Step 7.
+
+---
+
+## Troubleshooting: TAC cannot connect to the Runtime over JMX
+
+### `Bad URL path: _runtime:44444/jndi/rmi://vm_runtime:1099/karaf-trun`
+
+The Runtime is declared in TAC with the host **`vm_runtime`**. Java's JMX URL parser
+does not accept `_` in a host name: it stops reading the host at `vm` and takes the
+rest as a path.
+
+Fix: in TAC, edit the Runtime server and set the host to **`vm-runtime`** (or the
+alias `runtime`, or the IP `172.28.10.22`). The container is still called `vm_runtime`
+for Docker. Only the network name changes.
+
+### `Connection refused to host: 0.0.0.0` (or `127.0.0.1`)
+
+The registry (1099) answered, but it handed out an RMI server address the client
+cannot use. Check:
+
+```bash
+grep -E '^[[:space:]]*rmi' /opt/talend/runtime/current/etc/org.apache.karaf.management.cfg
+```
+
+`rmiServerHost` must be `vm-runtime` (Step 4.2), not `0.0.0.0` or `127.0.0.1`. Fix it,
+then restart:
+
+```bash
+sed -i -E 's|^[[:space:]]*#?[[:space:]]*(rmiServerHost)[[:space:]]*=.*|\1 = vm-runtime|' /opt/talend/runtime/current/etc/org.apache.karaf.management.cfg && systemctl restart talend-runtime
+```
+
+### `Authentication failed`
+
+The JMX connection works, but the user or password is wrong: use the `tadmin`
+password from Step 5 (`etc/users.properties`).
+
+> **JMX from the Windows host** (JConsole, VisualVM) goes through the published ports,
+> but the RMI server address it receives is `vm-runtime`, which Windows does not know.
+> Add `127.0.0.1 vm-runtime` to `C:\Windows\System32\drivers\etc\hosts` on the
+> docker host for that.
+

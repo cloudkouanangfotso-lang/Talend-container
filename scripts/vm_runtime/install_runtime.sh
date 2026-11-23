@@ -53,7 +53,11 @@ RT_HTTPS_PORT="${RT_HTTPS_PORT:-9001}"
 RT_SSH_PORT="${RT_SSH_PORT:-8101}"
 RT_RMI_REGISTRY_PORT="${RT_RMI_REGISTRY_PORT:-1099}"
 RT_RMI_SERVER_PORT="${RT_RMI_SERVER_PORT:-44444}"
-RT_LISTEN_HOST="${RT_LISTEN_HOST:-0.0.0.0}"     # SSH and JMX: reachable from other containers / the host
+RT_LISTEN_HOST="${RT_LISTEN_HOST:-0.0.0.0}"     # SSH and JMX registry: reachable from other containers / the host
+# JMX/RMI server host: Karaf listens on it AND gives it to the clients for their
+# second connection, so it must be a name they can reach - never 0.0.0.0, and
+# never a name with "_" (Java rejects it: "Bad URL path").
+RT_JMX_HOST="${RT_JMX_HOST:-$(hostname)}"
 RT_XMS="${RT_XMS:-512M}"
 RT_XMX="${RT_XMX:-2048M}"
 RT_ADMIN_USER="${RT_ADMIN_USER:-tadmin}"
@@ -136,7 +140,11 @@ esac
 if [[ -n "${RT_ADMIN_PASSWORD}" && "${RT_ADMIN_PASSWORD}" =~ [,\\[:space:]] ]]; then
   die "RT_ADMIN_PASSWORD must not contain spaces, ',' or '\\' (users.properties format)."
 fi
+[[ "${RT_JMX_HOST}" != *_* ]] || die "RT_JMX_HOST=${RT_JMX_HOST}: '_' is not allowed in a host name (use e.g. vm-runtime)."
+[[ "${RT_JMX_HOST}" != "0.0.0.0" ]] || die "RT_JMX_HOST must be a reachable name or IP, not 0.0.0.0."
+getent hosts "${RT_JMX_HOST}" >/dev/null || die "RT_JMX_HOST=${RT_JMX_HOST} does not resolve in this container."
 info "User/Group : ${RT_USER}:${RT_GROUP}"
+info "JMX host   : ${RT_JMX_HOST} ($(getent hosts "${RT_JMX_HOST}" | awk '{print $1; exit}'))"
 info "Package    : ${RT_ZIP}"
 info "Java       : ${JAVA_MAJOR} (${JDK_ARCH})"
 
@@ -249,11 +257,14 @@ set_cfg "${ETC}/org.ops4j.pax.web.cfg" org.osgi.service.http.port.secure "${RT_H
 # SSH console (Karaf shell)
 set_cfg "${ETC}/org.apache.karaf.shell.cfg" sshPort "${RT_SSH_PORT}"
 set_cfg "${ETC}/org.apache.karaf.shell.cfg" sshHost "${RT_LISTEN_HOST}"
-# JMX (Karaf defaults to 127.0.0.1: only reachable from inside the container)
+# JMX (Karaf defaults to 127.0.0.1: only reachable from inside the container).
+# Registry (1099): all interfaces. RMI server (44444): the container's name, which
+# Karaf also hands to the clients (TAC) for their second connection. With 0.0.0.0
+# there, clients fail with "Connection refused to host: 0.0.0.0".
 set_cfg "${ETC}/org.apache.karaf.management.cfg" rmiRegistryPort "${RT_RMI_REGISTRY_PORT}"
 set_cfg "${ETC}/org.apache.karaf.management.cfg" rmiServerPort   "${RT_RMI_SERVER_PORT}"
 set_cfg "${ETC}/org.apache.karaf.management.cfg" rmiRegistryHost "${RT_LISTEN_HOST}"
-set_cfg "${ETC}/org.apache.karaf.management.cfg" rmiServerHost   "${RT_LISTEN_HOST}"
+set_cfg "${ETC}/org.apache.karaf.management.cfg" rmiServerHost   "${RT_JMX_HOST}"
 
 # bin/setenv is read by bin/trun, bin/start, bin/client...: Java and memory for
 # every way of starting the Runtime (service or shell). Appended block = wins.
@@ -397,5 +408,7 @@ cat <<EOF
     Console     : su - ${RT_USER} -c '${RT_LINK}/bin/client'   (or ssh -p ${RT_SSH_PORT} ${RT_ADMIN_USER}@localhost)
     HTTP        : http://localhost:\${HOST_PORT_RT_HTTP:-8040}/services  (from the docker host)
 
-    In TAC (ESB Conductor), use host vm-runtime and SSH/JMX ports ${RT_SSH_PORT} / ${RT_RMI_REGISTRY_PORT}.
+    In TAC, declare the Runtime with host ${RT_JMX_HOST} (never vm_runtime: Java rejects "_"):
+      JMX URL : service:jmx:rmi://${RT_JMX_HOST}:${RT_RMI_SERVER_PORT}/jndi/rmi://${RT_JMX_HOST}:${RT_RMI_REGISTRY_PORT}/karaf-trun
+      SSH     : ${RT_JMX_HOST}:${RT_SSH_PORT}
 EOF

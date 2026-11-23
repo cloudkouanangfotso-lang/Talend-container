@@ -218,10 +218,13 @@ docker exec -it vm_runtime bash /opt/scripts/vm_runtime/install_runtime.sh
 * Options: `--no-start` (enable only), `--force` (reinstall Java and the Runtime; the
   previous folder is kept as `<folder>.bak-<date>`).
 * Variables: `RT_HTTP_PORT`, `RT_HTTPS_PORT`, `RT_SSH_PORT`, `RT_RMI_REGISTRY_PORT`,
-  `RT_RMI_SERVER_PORT`, `RT_LISTEN_HOST` (0.0.0.0), `RT_XMS` (512M), `RT_XMX` (2048M),
+  `RT_RMI_SERVER_PORT`, `RT_LISTEN_HOST` (0.0.0.0, SSH and JMX registry),
+  `RT_JMX_HOST` (container host name `vm-runtime`: the address Karaf gives to JMX
+  clients, never `0.0.0.0` or a name with `_`), `RT_XMS` (512M), `RT_XMX` (2048M),
   `RT_ADMIN_USER` (tadmin), `RT_ADMIN_PASSWORD`.
 * Console: `docker exec -it -u talend vm_runtime /opt/talend/runtime/current/bin/client`.
-  In TAC (ESB Conductor): host `vm-runtime`, SSH 8101, JMX 1099.
+  In TAC: host `vm-runtime` (**not** `vm_runtime`: Java rejects `_` with `Bad URL path`),
+  JMX `service:jmx:rmi://vm-runtime:44444/jndi/rmi://vm-runtime:1099/karaf-trun`, SSH 8101.
 
 ## Automated database setup (`vm_db`)
 
