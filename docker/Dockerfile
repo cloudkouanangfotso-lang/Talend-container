@@ -121,6 +121,17 @@ RUN groupadd --gid ${APP_UID} ${APP_USER} \
 # -----------------------------------------------------------------------------
 FROM systemd-base AS postgres
 
+ARG POSTGRES_UID=1100
+
+# Fixed UID/GID for the postgres account: the data volume (/var/lib/postgresql)
+# keeps the same owner when the container is recreated and PostgreSQL reinstalled.
+# The postgresql-common package reuses this account instead of creating one.
+RUN groupadd --system --gid ${POSTGRES_UID} postgres \
+ && useradd --system --uid ${POSTGRES_UID} --gid postgres --home-dir /var/lib/postgresql \
+      --no-create-home --shell /bin/bash --comment "PostgreSQL administrator" postgres \
+ && install -d -o postgres -g postgres -m 0755 /var/lib/postgresql /var/log/postgresql \
+ && install -d -o postgres -g postgres -m 0755 /etc/postgresql
+
 RUN install -d -m 0755 /etc/apt/keyrings \
  && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
       | gpg --dearmor -o /etc/apt/keyrings/pgdg.gpg \

@@ -89,11 +89,20 @@ services:
     build:
       context: ./docker
       target: postgres
-      args: *build-args
+      args:
+        <<: *build-args
+        POSTGRES_UID: ${POSTGRES_UID:-1100}
     shm_size: 512m
     environment:
       <<: *common-env
       DB_PORT: "5432"
+      DB_PG_VERSION: ${DB_PG_VERSION:-18}
+      DB_TAC_NAME: ${DB_TAC_NAME:-talend_tac}
+      DB_TAC_USER: ${DB_TAC_USER:-talend_tac}
+      DB_SHARED_BUFFERS: ${DB_SHARED_BUFFERS:-512MB}
+      DB_MAX_CONNECTIONS: ${DB_MAX_CONNECTIONS:-200}
+      # Clients allowed by pg_hba.conf: the docker network (containers + docker host)
+      DB_ALLOWED_CIDR: ${NETWORK_SUBNET:-172.28.10.0/24}
     ports:
       - "${HOST_BIND_IP:-0.0.0.0}:${HOST_PORT_DB:-5432}:5432"
     volumes:

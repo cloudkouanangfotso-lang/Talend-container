@@ -25,8 +25,10 @@ docker/Dockerfile       <- multi-stage: systemd-base | java | postgres
 docker/rootfs/          <- boot helper exporting compose env vars to login shells
 docker/certs/           <- optional corporate proxy CA (*.crt), trusted at build time
 docs/vm_tac_manual_install.md <- the same TAC install, step by step, by hand
+docs/vm_db_manual_install.md  <- the same PostgreSQL 18 setup, step by step, by hand
 scripts/                <- installation scripts, mounted read-only at /opt/scripts
   vm_tac/install_tac.sh <- Java 21 + Tomcat 11.0.29 + systemd + TAC war as ROOT
+  vm_db/install_db.sh   <- PostgreSQL 18 + configuration + systemd + TAC database
 ```
 
 ## Prerequisites (Windows docker host)
@@ -149,6 +151,36 @@ docker exec -it -e TAC_XMX=6g vm_tac bash /opt/scripts/vm_tac/install_tac.sh --f
 
 Service management: `systemctl status|restart talend-tac`, logs with
 `journalctl -u talend-tac -f` and `/opt/talend/tac/tomcat/logs`.
+
+## Automated database setup (`vm_db`)
+
+`scripts/vm_db/install_db.sh` runs **inside** `vm_db`, as root. It asks for the
+password of the TAC database user (nothing is stored in the project). To do the
+same steps by hand, with each command explained, see
+[docs/vm_db_manual_install.md](docs/vm_db_manual_install.md).
+
+```bash
+docker exec -it vm_db bash /opt/scripts/vm_db/install_db.sh
+```
+
+| Step | Result |
+|---|---|
+| 1. `postgres` account | fixed UID/GID 1100 (`POSTGRES_UID`), so the data volume keeps the right owner |
+| 2. PostgreSQL 18 (PGDG) | `postgresql-18` + client, automatic cluster creation disabled |
+| 3. Cluster `18/main` | port 5432, UTF8, `en_US.UTF-8`, data checksums |
+| 4. Configuration | `conf.d/10-talend.conf` (`listen_addresses='*'`, `max_connections`, `shared_buffers`, SCRAM, logging) and a `pg_hba.conf` rule for the docker network (`NETWORK_SUBNET`) |
+| 5. systemd | `postgresql@18-main` and `postgresql` enabled and started |
+| 6. TAC database | role `talend_tac` (login, no admin rights) owning database `talend_tac` (UTF8) |
+| 7. Checks | version, settings, TCP login with the password |
+
+* Database and user names, `shared_buffers` and `max_connections` come from `.env`
+  (`DB_TAC_NAME`, `DB_TAC_USER`, `DB_SHARED_BUFFERS`, `DB_MAX_CONNECTIONS`).
+* Non-interactive: `docker exec -it -e DB_TAC_PASSWORD='…' vm_db bash /opt/scripts/vm_db/install_db.sh`.
+  `--skip-tac-db` installs PostgreSQL without creating the TAC database.
+* Safe to run again. **After a container recreate** it reinstalls the binaries and
+  reuses the existing cluster and data. Running it again with a password also
+  resets the TAC user's password.
+* TAC connection: `jdbc:postgresql://vm-db:5432/talend_tac`, user `talend_tac`.
 
 ## Network and traffic
 
