@@ -67,7 +67,9 @@ RUN find /etc/systemd/system /lib/systemd/system \
 # systemd does not pass the container environment to `su -` / ssh sessions.
 COPY rootfs/ /
 RUN chmod 0755 /usr/local/sbin/container-env-export \
- && systemctl enable container-env-export.service
+ && systemctl enable container-env-export.service \
+ && chmod 0644 /etc/profile.d/zz-talend-java.sh \
+ && printf '\n# Talend Java (see /etc/profile.d/zz-talend-java.sh)\n[ -r /etc/profile.d/zz-talend-java.sh ] && . /etc/profile.d/zz-talend-java.sh\n' >> /etc/bash.bashrc
 
 # Mount point of the Windows host binaries folder (bind mount, read-only)
 RUN mkdir -p /opt/binary

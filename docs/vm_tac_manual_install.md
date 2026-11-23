@@ -155,6 +155,22 @@ This must print `openjdk version "21.0.x" ... LTS`.
 > part of the container, not a volume. After `docker compose down` / `up` it would be
 > gone, and Tomcat would no longer start. `/opt/talend` is persisted.
 
+### 1.4 Default Java of the container
+
+```bash
+ln -sfn $JAVA_LINK $JAVA_BASE/default
+chown -h talend:talend $JAVA_BASE/default
+```
+
+* The image contains `/etc/profile.d/zz-talend-java.sh`. In every shell (login or not,
+  root or `talend`) it sets `JAVA_HOME=/opt/talend/java/default` and puts it first in
+  `PATH` **when this link exists**.
+* Why it matters: `/home/talend` is **not** in a volume. After a container recreate,
+  the block added to `~/.profile` in Step 2 is gone, but the image file and this link
+  (in the volume) remain, so shells keep Java 21 instead of the image's Java 17.
+  (The Tomcat service is not affected: its unit sets `JAVA_HOME` itself.)
+* `chown -h` changes the owner of the **link itself**, not of its target.
+
 ---
 
 ## Step 2: JAVA_HOME and PATH for user talend

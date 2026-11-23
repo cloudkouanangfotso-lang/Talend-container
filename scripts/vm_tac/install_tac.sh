@@ -150,6 +150,10 @@ else
   chown -R "${TAC_USER}:${TAC_GROUP}" "${JAVA_BASE}"
   info "Installed: $("${JAVA_LINK}/bin/java" -version 2>&1 | sed -n 1p)"
 fi
+# Default Java of the container, used by /etc/profile.d/zz-talend-java.sh (image):
+# keeps JAVA_HOME after a container recreate, when the home folder is reset.
+ln -sfn "${JAVA_LINK}" "${JAVA_BASE}/default"
+chown -h "${TAC_USER}:${TAC_GROUP}" "${JAVA_BASE}/default"
 
 # ----------------------------------------------------------------------------
 # 2. JAVA_HOME + PATH for user talend

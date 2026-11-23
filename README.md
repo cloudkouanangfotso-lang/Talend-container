@@ -26,10 +26,12 @@ docker/rootfs/          <- boot helper exporting compose env vars to login shell
 docker/certs/           <- optional corporate proxy CA (*.crt), trusted at build time
 docs/vm_tac_manual_install.md <- the same TAC install, step by step, by hand
 docs/vm_db_manual_install.md  <- the same PostgreSQL 18 setup, step by step, by hand
+docs/vm_jobserver_manual_install.md <- the same JobServer install, step by step, by hand
 scripts/                <- installation scripts, mounted read-only at /opt/scripts
   vm_tac/install_tac.sh <- Java 21 + Tomcat 11.0.29 + systemd + TAC war as ROOT
   vm_tac/install_jdbc_postgresql.sh <- PostgreSQL JDBC driver into TAC (called by install_tac.sh)
   vm_db/install_db.sh   <- PostgreSQL 18 + configuration + systemd + TAC database
+  vm_jobserver/install_jobserver.sh <- Java 21 + JobServer + properties + systemd
 ```
 
 ## Prerequisites (Windows docker host)
@@ -165,6 +167,31 @@ docker exec -it -e PG_JDBC_VERSION=42.7.13 vm_tac bash /opt/scripts/vm_tac/insta
 
 Service management: `systemctl status|restart talend-tac`, logs with
 `journalctl -u talend-tac -f` and `/opt/talend/tac/tomcat/logs`.
+
+## Automated JobServer installation (`vm_jobserver`)
+
+`scripts/vm_jobserver/install_jobserver.sh` runs **inside** `vm_jobserver`, as root.
+To do the same steps by hand, with each command explained, see
+[docs/vm_jobserver_manual_install.md](docs/vm_jobserver_manual_install.md).
+
+```bash
+docker exec -it vm_jobserver bash /opt/scripts/vm_jobserver/install_jobserver.sh
+```
+
+| Step | Result |
+|---|---|
+| 1. Java 21 (Temurin, SHA-256 checked) | `/opt/talend/java/jdk21`, plus `/opt/talend/java/default` used by every shell |
+| 2. `JAVA_HOME` + `PATH` for `talend` | block in `~talend/.profile` and `~talend/.bashrc` |
+| 3. JobServer from `$BINARY_PATH/$BINARY_JOBSERVER` | `/opt/talend/jobserver/<package folder>`, symlink `/opt/talend/jobserver/current`; `*.sh` made executable |
+| 4. `TalendJobServer.properties` | ports 8000 / 8001 / 8888 / 8555 set (only keys present in the file; original kept as `.orig`) |
+| 5. systemd | `talend-jobserver.service`, `User=talend`, `Group=talend`, enabled and started (`Type=forking` if `start_rs.sh` runs in the background) |
+| 6. Checks | service status and listening ports |
+
+* Options: `--no-start` (enable only), `--force` (reinstall Java and the JobServer;
+  the previous JobServer folder is kept as `<folder>.bak-<date>`).
+* Variables: `JS_COMMAND_PORT`, `JS_FILE_PORT`, `JS_MONITORING_PORT`,
+  `JS_PROCESS_MESSAGE_PORT`, `JAVA_MAJOR`, `SERVICE_NAME` (talend-jobserver).
+* In TAC, **Servers > Add**: host `vm-jobserver`, ports 8000 / 8001 / 8888.
 
 ## Automated database setup (`vm_db`)
 
