@@ -143,7 +143,9 @@ pg_lsclusters
 
 ## Step 3: Create the cluster 18/main
 
-Skip this step if `pg_lsclusters` already shows `18 main`.
+**Skip this step if `pg_lsclusters` already shows `18 main`**, and go to
+[3.1 If the cluster already exists](#31-if-the-cluster-already-exists) instead.
+Otherwise `pg_createcluster` stops with `Error: cluster configuration already exists`.
 
 ```bash
 pg_createcluster $PG_VERSION $PG_CLUSTER --port $PG_PORT --locale $PG_LOCALE --encoding UTF8 -- --data-checksums
@@ -165,6 +167,49 @@ pg_lsclusters
 
 Expected: `18  main  5432 down  postgres /var/lib/postgresql/18/main ...` (`down` is
 normal: the cluster is not started yet).
+
+### 3.1 If the cluster already exists
+
+`Error: cluster configuration already exists` means `/etc/postgresql/18/main` is already
+there, and `pg_createcluster` never overwrites a cluster. It usually comes from:
+
+* an earlier run of `install_db.sh`. The cluster is saved in the `db_conf` / `db_data`
+  volumes, so it survives `docker compose down` / `up`;
+* installing the package without Step 2.1. `postgresql-18` then creates `18/main`
+  itself, with default options.
+
+Check that the existing cluster has the right options. Start it:
+
+```bash
+systemctl restart postgresql@$PG_VERSION-$PG_CLUSTER
+```
+
+Check its encoding, locale and checksums:
+
+```bash
+su - postgres -c "psql -Atc \"select 'encoding=' || pg_encoding_to_char(encoding) || '  collate=' || datcollate || '  checksums=' || current_setting('data_checksums') from pg_database where datname = 'template1'\""
+```
+
+Expected: `encoding=UTF8  collate=en_US.UTF-8  checksums=on`.
+
+List the databases that already exist:
+
+```bash
+su - postgres -c "psql -l"
+```
+
+* **Values as expected:** keep the cluster and continue with Step 4. If `talend_tac`
+  is already listed, the script already ran: Steps 4 to 6 only confirm what is there
+  (see the notes in each step).
+* **Different values** (for example `C.UTF-8` or `SQL_ASCII`): the cluster was created
+  with the package defaults. If it holds **no data you need**, drop it and run Step 3:
+
+  ```bash
+  pg_dropcluster --stop $PG_VERSION $PG_CLUSTER
+  ```
+
+  > `pg_dropcluster` **deletes** the cluster's data folder and configuration for good.
+  > Check with `psql -l` first that no `talend_tac` database with TAC data exists.
 
 ---
 
@@ -220,7 +265,7 @@ grep -n "^include_dir" $PG_CONF_DIR/postgresql.conf || printf "\n# Talend settin
 ### 4.3 pg_hba.conf: who may connect
 
 ```bash
-cat >> $PG_CONF_DIR/pg_hba.conf <<EOF
+grep -q '^# >>> talend (install_db.sh) >>>' $PG_CONF_DIR/pg_hba.conf || cat >> $PG_CONF_DIR/pg_hba.conf <<EOF
 # >>> talend (install_db.sh) >>>
 # TYPE  DATABASE        USER            ADDRESS                 METHOD
 host    all             all             $ALLOWED_CIDR         scram-sha-256
@@ -228,6 +273,8 @@ host    all             all             $ALLOWED_CIDR         scram-sha-256
 EOF
 ```
 
+* `grep -q … ||`: the block is added only if it is not already there (for example
+  from an earlier script run), so running this step twice does not duplicate it.
 * `pg_hba.conf` (host-based authentication) is read from top to bottom. The **first**
   line that matches the connection type, database, user and client address decides.
 * `host … 172.28.10.0/24 scram-sha-256`: TCP connections from the docker network, to
@@ -236,7 +283,7 @@ EOF
 * The existing lines stay: `local … peer` (the `postgres` Linux user logs in without a
   password) and `host … 127.0.0.1/32 scram-sha-256` (local TCP).
 * The markers are the ones the script uses, so the script would replace this block
-  instead of adding a second one. Run this step **once** by hand.
+  instead of adding a second one.
 
 ```bash
 grep -vE '^\s*(#|$)' $PG_CONF_DIR/pg_hba.conf
@@ -275,6 +322,11 @@ systemctl status postgresql@$PG_VERSION-$PG_CLUSTER --no-pager
 ---
 
 ## Step 6: Create the TAC user and database
+
+> **After an earlier script run** the role and the database already exist:
+> `CREATE ROLE` / `CREATE DATABASE` then fail with `ERROR: role "talend_tac" already exists`
+> or `database "talend_tac" already exists`. That is harmless. Skip those commands, and
+> use only `\password` if you want to set a new password.
 
 ### 6.1 The user (role) and its password
 
