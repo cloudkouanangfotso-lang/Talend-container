@@ -210,7 +210,7 @@ docker exec -it vm_runtime bash /opt/scripts/vm_runtime/install_runtime.sh
 | 1. Java 21 (Temurin, SHA-256 checked) | `/opt/talend/java/jdk21`, plus `/opt/talend/java/default` used by every shell |
 | 2. `JAVA_HOME` + `PATH` for `talend` | block in `~talend/.profile` and `~talend/.bashrc` |
 | 3. Runtime from `$BINARY_PATH/$BINARY_RUNTIME` | Karaf home (the folder with `bin/trun`) in `/opt/talend/runtime/<package folder>`, symlink `/opt/talend/runtime/current` |
-| 4. Karaf configuration | HTTP 8040 / 9001, SSH 8101, JMX 1099 / 44444; SSH and JMX listen on `0.0.0.0` (Karaf defaults JMX to `127.0.0.1`); `bin/setenv`: Java 21, heap 512M / 2048M. Only keys present are changed, originals kept as `*.orig` |
+| 4. Karaf configuration | HTTP 8040 / 9001, SSH 8101, JMX 1099 / 44444; SSH and JMX listen on `0.0.0.0` (Karaf defaults JMX to `127.0.0.1`); `bin/setenv`: Java 21, heap `-Xms512M -Xmx2048M` in `EXTRA_JAVA_OPTS` (CRLF converted, syntax checked with `sh -n`). Only keys present are changed, originals kept as `*.orig` |
 | 5. Admin password | `tadmin` in `etc/users.properties`, asked interactively (empty = keep) or from `RT_ADMIN_PASSWORD`; warns about accounts still using their default password |
 | 6. systemd | `talend-runtime.service` (`bin/trun server`), `User=talend`, `Group=talend`, enabled and started |
 | 7. Checks | service status and listening ports |

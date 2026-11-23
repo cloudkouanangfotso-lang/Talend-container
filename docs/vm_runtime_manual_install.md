@@ -142,7 +142,6 @@ chown -h talend:talend $JAVA_BASE/default
 cat >> /home/talend/.profile <<'EOF'
 # >>> talend java (install_runtime.sh) >>>
 export JAVA_HOME=/opt/talend/java/jdk21
-export KARAF_HOME=/opt/talend/runtime/current
 case ":$PATH:" in *":$JAVA_HOME/bin:"*) ;; *) export PATH="$JAVA_HOME/bin:$PATH" ;; esac
 # <<< talend java (install_runtime.sh) <<<
 EOF
@@ -152,7 +151,6 @@ EOF
 cat >> /home/talend/.bashrc <<'EOF'
 # >>> talend java (install_runtime.sh) >>>
 export JAVA_HOME=/opt/talend/java/jdk21
-export KARAF_HOME=/opt/talend/runtime/current
 case ":$PATH:" in *":$JAVA_HOME/bin:"*) ;; *) export PATH="$JAVA_HOME/bin:$PATH" ;; esac
 # <<< talend java (install_runtime.sh) <<<
 EOF
@@ -160,8 +158,9 @@ chown talend:talend /home/talend/.profile /home/talend/.bashrc
 ```
 
 * `>>` **appends** the block. `'EOF'` in quotes keeps `$PATH` literal in the file.
-* `KARAF_HOME` is the standard Karaf variable for the installation folder. The Karaf
-  scripts also work it out themselves.
+* `KARAF_HOME` (Karaf's installation folder) is deliberately **not** set: the Karaf
+  scripts work it out themselves, and a predefined value only triggers the warning
+  `Ignoring predefined value for KARAF_HOME`.
 * The markers match the script's, so the script replaces this block instead of adding
   another. Run this step **once** by hand.
 
@@ -216,6 +215,23 @@ chown -R talend:talend $RT_BASE
   `stop` and `client` must be executable. The Windows `.bat` files are left alone.
 * Karaf writes into its own folder (`data/` cache, `log/`, `deploy/`), so `talend` must
   own it.
+
+Check for Windows line endings (CRLF) in the scripts:
+
+```bash
+grep -l $'\r' $RT_LINK/bin/* | grep -v '\.bat$'
+```
+
+* `$'\r'` is the carriage-return character that Windows puts at the end of each line.
+  `grep -l` lists the files that contain it, and `.bat` files are expected to have it.
+* `/bin/sh` cannot run a script with CRLF line endings (`Syntax error`, or `not found`
+  on every line). If files are listed, convert them:
+
+```bash
+for f in $(grep -l $'\r' $RT_LINK/bin/* | grep -v '\.bat$'); do sed -i 's/\r$//' $f; done
+```
+
+* `sed -i 's/\r$//'` removes the carriage return at the end of each line.
 
 ---
 
@@ -276,21 +292,49 @@ This shows the changes (repeat for the other files).
 
 ### 4.3 Java and memory: bin/setenv
 
+`bin/setenv` is read by `bin/trun`, `start`, `stop` and `client`, so every way of
+starting the Runtime (systemd or a shell) uses the same Java and memory.
+
+First, make sure the file ends with a newline:
+
+```bash
+sed -i -e '$a\' bin/setenv
+```
+
+* `$a\` means "after the last line, append nothing": GNU `sed` then adds the final
+  newline only if it is missing, and leaves the file unchanged otherwise.
+* **This is important.** Talend's `setenv` can end without a newline. The block below
+  would then be glued to its last line (`fi# >>> talend ...`), `sh` would read `>>>` as
+  a redirection, and the Runtime would stop at once with `status=2` (see Troubleshooting).
+
 ```bash
 cat >> bin/setenv <<'EOF'
 # >>> talend (install_runtime.sh) >>>
 export JAVA_HOME=/opt/talend/java/jdk21
 export JAVA_MIN_MEM=512M
 export JAVA_MAX_MEM=2048M
+export EXTRA_JAVA_OPTS="${EXTRA_JAVA_OPTS} -Xms512M -Xmx2048M"
 # <<< talend (install_runtime.sh) <<<
 EOF
 ```
 
-* `bin/setenv` is read by `bin/trun`, `start`, `stop` and `client`, so every way of
-  starting the Runtime (systemd or a shell) uses the same Java and memory.
-* `JAVA_MIN_MEM` / `JAVA_MAX_MEM` become `-Xms` / `-Xmx` (start / max heap). Raise
-  `JAVA_MAX_MEM` when many Routes or Services are deployed.
-* The block is **appended at the end**, so it wins over any value set earlier in the file.
+* `-Xms` / `-Xmx` are the starting and maximum heap. Raise `-Xmx` when many Routes or
+  Services are deployed.
+* **Karaf 4.4's Unix scripts ignore `JAVA_MIN_MEM` / `JAVA_MAX_MEM`** (only the Windows
+  `.bat` files still read them). The heap is passed through `EXTRA_JAVA_OPTS`, which
+  Karaf adds **last** to the `java` command line, so it wins over any earlier `-Xmx`.
+  `${EXTRA_JAVA_OPTS}` at the start keeps a value `setenv` may already define.
+  The two `*_MEM` lines are kept for launchers that still use them.
+* The block is **appended at the end**, so it wins over values set earlier in the file.
+
+Check the syntax before going further:
+
+```bash
+sh -n bin/setenv && echo "setenv: syntax OK"
+```
+
+* `sh -n` reads the script without running it and reports syntax errors. If it prints
+  an error, restore the original (`cp -p bin/setenv.orig bin/setenv`) and start 4.3 again.
 
 ---
 
@@ -345,9 +389,6 @@ User=talend
 Group=talend
 UMask=0027
 Environment=JAVA_HOME=/opt/talend/java/jdk21
-Environment=JAVA_MIN_MEM=512M
-Environment=JAVA_MAX_MEM=2048M
-Environment=KARAF_HOME=/opt/talend/runtime/current
 Environment=PATH=/opt/talend/java/jdk21/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 WorkingDirectory=/opt/talend/runtime/current
 ExecStart=/opt/talend/runtime/current/bin/trun server
@@ -369,7 +410,7 @@ EOF
 | `ExecStart=… bin/trun server` | `server` runs Karaf in the **foreground without an interactive console** (the console needs a terminal, which a service does not have). `Type=simple`: systemd watches this process. |
 | `User=talend` / `Group=talend` | Karaf and everything it runs use `talend:talend`, never root. |
 | `UMask=0027` | New files are `rw-r-----`. |
-| `Environment=` | systemd does not read `.profile`. Java and memory are also set here, in case `bin/setenv` changes. |
+| `Environment=` | systemd does not read `.profile`, so `JAVA_HOME` and `PATH` are set here. Memory comes from `bin/setenv` (4.3). |
 | `WorkingDirectory` | The Karaf home, so relative paths resolve from it. |
 | `SuccessExitStatus=0 143` | On `systemctl stop`, systemd sends SIGTERM and Karaf shuts down cleanly. Java then exits with 143 (128 + SIGTERM), which counts as success here. |
 | `TimeoutStartSec=180` / `TimeoutStopSec=120` | The first start installs the features (slow). A stop waits for the Routes to end. |
@@ -404,6 +445,14 @@ ss -ltnp | grep -E ':(8040|8101|1099|44444) '
 * Ports 8040 (HTTP), 8101 (SSH) and 1099 (JMX) must show a `java` process. The first
   start can take one or two minutes. Run it again if a port is still missing.
 * `0.0.0.0:1099` (not `127.0.0.1:1099`) confirms that 4.2 worked.
+
+```bash
+tr '\0' '\n' < /proc/$(pgrep -n -u talend java)/cmdline | grep -E '^-Xm[sx]'
+```
+
+* `/proc/<pid>/cmdline` holds the full `java` command line, with arguments separated by
+  zero bytes. `tr` turns them into lines. Expected: `-Xms512M` and `-Xmx2048M` (if `-Xmx`
+  appears twice, the **last** one applies).
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8040/services
@@ -462,7 +511,47 @@ to reach `vm-nexus:8081`.
 | Stop / start / restart | `systemctl stop\|start\|restart talend-runtime` |
 | Console | `su - talend -c /opt/talend/runtime/current/bin/client` |
 | Live log | `tail -f /opt/talend/runtime/current/log/tesb.log` |
-| Change memory | edit the block in `bin/setenv` **and** the unit, then `systemctl daemon-reload && systemctl restart talend-runtime` |
+| Change memory | edit `-Xms` / `-Xmx` in the block at the end of `bin/setenv`, then `systemctl restart talend-runtime` |
 | Change a port | edit `etc/*.cfg` (Karaf applies most changes live; restart to be sure) |
 | Deploy a bundle/feature by hand | copy the `.jar` / `.kar` into `/opt/talend/runtime/current/deploy/` |
 | Clean the cache (after a failed upgrade) | `systemctl stop talend-runtime && rm -rf /opt/talend/runtime/current/data/cache && systemctl start talend-runtime` |
+
+---
+
+## Troubleshooting: service in a restart loop, `status=2/INVALIDARGUMENT`
+
+Symptom: `systemctl status talend-runtime` shows `activating (auto-restart)`,
+`code=exited, status=2`, a few MB of memory and a few ms of CPU. Java never started:
+`bin/trun` (a `/bin/sh` script) stopped at once. Exit status 2 is what `sh` returns on a
+**syntax error**.
+
+### 1. Read the error
+
+```bash
+journalctl -u talend-runtime -n 20 --no-pager -o cat
+```
+
+* Typical message: `bin/setenv: Syntax error: redirection unexpected` or
+  `Syntax error: end of file unexpected`. The file and line number are given.
+
+```bash
+sh -n bin/setenv; sh -n bin/trun
+```
+
+* No output means no syntax error in these files. Run it in `/opt/talend/runtime/current`.
+
+### 2. Causes and fixes
+
+| Cause | Check | Fix |
+|---|---|---|
+| The Talend block was glued to the last line of `setenv` (the file had no final newline) | `grep -n '# >>> talend' bin/setenv` shows text **before** `#`, for example `fi# >>> talend (install_runtime.sh) >>>` | `sed -i 's/^\(.*[^[:space:]]\)[[:space:]]*\(# >>> talend (install_runtime.sh) >>>\)$/\1\n\2/' bin/setenv` puts the marker back on its own line. Or rerun `install_runtime.sh`, which now repairs it. |
+| Windows line endings (CRLF) | `grep -l $'\r' bin/* \| grep -v '\.bat$'` | `sed -i 's/\r$//' bin/setenv bin/trun` (see 3.2) |
+| An edit broke `setenv` | `sh -n bin/setenv` reports an error | `cp -p bin/setenv.orig bin/setenv`, then redo 4.3 |
+
+### 3. Restart and check
+
+```bash
+sh -n bin/setenv && systemctl restart talend-runtime && sleep 10 && systemctl is-active talend-runtime
+```
+
+Expected: `active`. Then go through Step 7.

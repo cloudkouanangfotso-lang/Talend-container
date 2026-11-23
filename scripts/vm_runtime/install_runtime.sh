@@ -87,7 +87,12 @@ set_block() {
   local file="$1" content="$2" tag="${3:-talend java (install_runtime.sh)}"
   local begin="# >>> ${tag} >>>" end="# <<< ${tag} <<<"
   touch "$file"
+  # Repair: a marker glued to the end of the previous line (file that had no
+  # final newline, e.g. 'fi# >>> ...') is moved back to its own line
+  sed -i "s|^\(.*[^[:space:]]\)[[:space:]]*\(${begin}\)\$|\1\n\2|" "$file"
   sed -i "\|^${begin}\$|,\|^${end}\$|d" "$file"
+  # The file must end with a newline, or the block would be glued to its last line
+  if [[ -s "$file" && -n "$(tail -c 1 "$file")" ]]; then printf '\n' >> "$file"; fi
   printf '%s\n%s\n%s\n' "$begin" "$content" "$end" >> "$file"
 }
 
@@ -179,7 +184,6 @@ chown -h "${RT_USER}:${RT_GROUP}" "${JAVA_BASE}/default"
 log "2/7 JAVA_HOME and PATH for ${RT_USER}"
 RT_USER_HOME="$(getent passwd "${RT_USER}" | cut -d: -f6)"
 JAVA_ENV="export JAVA_HOME=${JAVA_LINK}
-export KARAF_HOME=${RT_LINK}
 case \":\$PATH:\" in *\":\$JAVA_HOME/bin:\"*) ;; *) export PATH=\"\$JAVA_HOME/bin:\$PATH\" ;; esac"
 for f in "${RT_USER_HOME}/.profile" "${RT_USER_HOME}/.bashrc"; do
   set_block "$f" "${JAVA_ENV}"
@@ -222,6 +226,10 @@ info "Launcher   : bin/${LAUNCHER}"
 
 # Unix permissions are not always kept in zip files: make bin/ executable
 find "${RT_HOME_REAL}/bin" -maxdepth 1 -type f ! -name '*.bat' -exec chmod 0755 {} +
+# Windows line endings (CRLF) break shell scripts: convert them
+while IFS= read -r -d '' f; do
+  if grep -q $'\r' "$f"; then sed -i 's/\r$//' "$f"; info "Converted CRLF to LF: bin/$(basename "$f")"; fi
+done < <(find "${RT_HOME_REAL}/bin" -maxdepth 1 -type f ! -name '*.bat' -print0)
 chown -R "${RT_USER}:${RT_GROUP}" "${RT_BASE}"
 
 # ----------------------------------------------------------------------------
@@ -250,10 +258,20 @@ set_cfg "${ETC}/org.apache.karaf.management.cfg" rmiServerHost   "${RT_LISTEN_HO
 # bin/setenv is read by bin/trun, bin/start, bin/client...: Java and memory for
 # every way of starting the Runtime (service or shell). Appended block = wins.
 if [[ -f "${RT_HOME_REAL}/bin/setenv" ]]; then
+  # Karaf 4.4 Unix scripts ignore JAVA_MIN_MEM/JAVA_MAX_MEM: the heap goes in
+  # EXTRA_JAVA_OPTS (added last to the java command line, so it wins). Both are set.
   set_block "${RT_HOME_REAL}/bin/setenv" "export JAVA_HOME=${JAVA_LINK}
 export JAVA_MIN_MEM=${RT_XMS}
-export JAVA_MAX_MEM=${RT_XMX}" "talend (install_runtime.sh)"
-  info "bin/setenv: JAVA_HOME=${JAVA_LINK}, JAVA_MIN_MEM=${RT_XMS}, JAVA_MAX_MEM=${RT_XMX}"
+export JAVA_MAX_MEM=${RT_XMX}
+export EXTRA_JAVA_OPTS=\"\${EXTRA_JAVA_OPTS} -Xms${RT_XMS} -Xmx${RT_XMX}\"" "talend (install_runtime.sh)"
+  info "bin/setenv: JAVA_HOME=${JAVA_LINK}, heap -Xms${RT_XMS} -Xmx${RT_XMX} (EXTRA_JAVA_OPTS)"
+  # bin/trun sources setenv with /bin/sh: a syntax error there stops the Runtime
+  # immediately (exit status 2). Check it now rather than at service start.
+  if ! sh_err="$(sh -n "${RT_HOME_REAL}/bin/setenv" 2>&1)"; then
+    cp -p "${RT_HOME_REAL}/bin/setenv.orig" "${RT_HOME_REAL}/bin/setenv"
+    die "bin/setenv has a syntax error after editing (${sh_err}). The original was restored."
+  fi
+  info "bin/setenv: syntax OK (sh -n)"
 else
   warn "bin/setenv not found: Java and memory are only set in the systemd unit"
 fi
@@ -267,7 +285,7 @@ if [[ ! -f "${USERS}" ]]; then
   warn "users.properties not found: password not changed"
 elif ! grep -qE "^[[:space:]]*${RT_ADMIN_USER}[[:space:]]*=" "${USERS}"; then
   warn "User ${RT_ADMIN_USER} not found in users.properties: password not changed"
-  info "Users defined: $(grep -E '^[[:space:]]*[A-Za-z0-9_.-]+[[:space:]]*=' "${USERS}" | grep -v '^_g_' | cut -d= -f1 | tr -d ' ' | tr '\n' ' ')"
+  info "Users defined: $( { grep -E '^[[:space:]]*[A-Za-z0-9_.-]+[[:space:]]*=' "${USERS}" || true; } | { grep -v '^_g_' || true; } | cut -d= -f1 | tr -d ' ' | tr '\n' ' ')"
 else
   if [[ -z "${RT_ADMIN_PASSWORD}" && -t 0 ]]; then
     while :; do
@@ -308,6 +326,10 @@ else
 fi
 chown -R "${RT_USER}:${RT_GROUP}" "${RT_BASE}"
 
+if ! sh_err="$(sh -n "${RT_HOME_REAL}/bin/${LAUNCHER}" 2>&1)"; then
+  die "bin/${LAUNCHER} has a syntax error: ${sh_err}"
+fi
+
 # ----------------------------------------------------------------------------
 # 6. systemd service
 #    "bin/trun server" runs Karaf in the foreground without an interactive
@@ -326,9 +348,6 @@ User=${RT_USER}
 Group=${RT_GROUP}
 UMask=0027
 Environment=JAVA_HOME=${JAVA_LINK}
-Environment=JAVA_MIN_MEM=${RT_XMS}
-Environment=JAVA_MAX_MEM=${RT_XMX}
-Environment=KARAF_HOME=${RT_LINK}
 Environment=PATH=${JAVA_LINK}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 WorkingDirectory=${RT_LINK}
 ExecStart=${RT_LINK}/bin/${LAUNCHER} server
