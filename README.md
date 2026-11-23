@@ -27,11 +27,13 @@ docker/certs/           <- optional corporate proxy CA (*.crt), trusted at build
 docs/vm_tac_manual_install.md <- the same TAC install, step by step, by hand
 docs/vm_db_manual_install.md  <- the same PostgreSQL 18 setup, step by step, by hand
 docs/vm_jobserver_manual_install.md <- the same JobServer install, step by step, by hand
+docs/vm_runtime_manual_install.md   <- the same Talend Runtime install, step by step, by hand
 scripts/                <- installation scripts, mounted read-only at /opt/scripts
   vm_tac/install_tac.sh <- Java 21 + Tomcat 11.0.29 + systemd + TAC war as ROOT
   vm_tac/install_jdbc_postgresql.sh <- PostgreSQL JDBC driver into TAC (called by install_tac.sh)
   vm_db/install_db.sh   <- PostgreSQL 18 + configuration + systemd + TAC database
   vm_jobserver/install_jobserver.sh <- Java 21 + JobServer + properties + systemd
+  vm_runtime/install_runtime.sh     <- Java 21 + Talend Runtime (Karaf) + config + systemd
 ```
 
 ## Prerequisites (Windows docker host)
@@ -192,6 +194,34 @@ docker exec -it vm_jobserver bash /opt/scripts/vm_jobserver/install_jobserver.sh
 * Variables: `JS_COMMAND_PORT`, `JS_FILE_PORT`, `JS_MONITORING_PORT`,
   `JS_PROCESS_MESSAGE_PORT`, `JAVA_MAJOR`, `SERVICE_NAME` (talend-jobserver).
 * In TAC, **Servers > Add**: host `vm-jobserver`, ports 8000 / 8001 / 8888.
+
+## Automated Talend Runtime installation (`vm_runtime`)
+
+`scripts/vm_runtime/install_runtime.sh` runs **inside** `vm_runtime`, as root.
+To do the same steps by hand, with each command explained, see
+[docs/vm_runtime_manual_install.md](docs/vm_runtime_manual_install.md).
+
+```bash
+docker exec -it vm_runtime bash /opt/scripts/vm_runtime/install_runtime.sh
+```
+
+| Step | Result |
+|---|---|
+| 1. Java 21 (Temurin, SHA-256 checked) | `/opt/talend/java/jdk21`, plus `/opt/talend/java/default` used by every shell |
+| 2. `JAVA_HOME` + `PATH` for `talend` | block in `~talend/.profile` and `~talend/.bashrc` |
+| 3. Runtime from `$BINARY_PATH/$BINARY_RUNTIME` | Karaf home (the folder with `bin/trun`) in `/opt/talend/runtime/<package folder>`, symlink `/opt/talend/runtime/current` |
+| 4. Karaf configuration | HTTP 8040 / 9001, SSH 8101, JMX 1099 / 44444; SSH and JMX listen on `0.0.0.0` (Karaf defaults JMX to `127.0.0.1`); `bin/setenv`: Java 21, heap 512M / 2048M. Only keys present are changed, originals kept as `*.orig` |
+| 5. Admin password | `tadmin` in `etc/users.properties`, asked interactively (empty = keep) or from `RT_ADMIN_PASSWORD`; warns about accounts still using their default password |
+| 6. systemd | `talend-runtime.service` (`bin/trun server`), `User=talend`, `Group=talend`, enabled and started |
+| 7. Checks | service status and listening ports |
+
+* Options: `--no-start` (enable only), `--force` (reinstall Java and the Runtime; the
+  previous folder is kept as `<folder>.bak-<date>`).
+* Variables: `RT_HTTP_PORT`, `RT_HTTPS_PORT`, `RT_SSH_PORT`, `RT_RMI_REGISTRY_PORT`,
+  `RT_RMI_SERVER_PORT`, `RT_LISTEN_HOST` (0.0.0.0), `RT_XMS` (512M), `RT_XMX` (2048M),
+  `RT_ADMIN_USER` (tadmin), `RT_ADMIN_PASSWORD`.
+* Console: `docker exec -it -u talend vm_runtime /opt/talend/runtime/current/bin/client`.
+  In TAC (ESB Conductor): host `vm-runtime`, SSH 8101, JMX 1099.
 
 ## Automated database setup (`vm_db`)
 
