@@ -24,6 +24,7 @@ docker-compose.yml
 docker/Dockerfile       <- multi-stage: systemd-base | java | postgres
 docker/rootfs/          <- boot helper exporting compose env vars to login shells
 docker/certs/           <- optional corporate proxy CA (*.crt), trusted at build time
+docs/vm_tac_manual_install.md <- the same TAC install, step by step, by hand
 scripts/                <- installation scripts, mounted read-only at /opt/scripts
   vm_tac/install_tac.sh <- Java 21 + Tomcat 11.0.29 + systemd + TAC war as ROOT
 ```
@@ -107,7 +108,8 @@ automatically each time the container starts.
 
 ## Automated TAC installation (`vm_tac`)
 
-`scripts/vm_tac/install_tac.sh` runs **inside** `vm_tac`, as root:
+`scripts/vm_tac/install_tac.sh` runs **inside** `vm_tac`, as root (to do the same steps by hand, with an explanation of each
+command, see [docs/vm_tac_manual_install.md](docs/vm_tac_manual_install.md)):
 
 ```bash
 docker exec -it vm_tac bash /opt/scripts/vm_tac/install_tac.sh
