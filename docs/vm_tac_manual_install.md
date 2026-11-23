@@ -9,6 +9,7 @@ so you can use either one, or follow the guide to understand what the script doe
 | Java 21 (Eclipse Temurin) | `/opt/talend/java/jdk-21.x`, symlink `/opt/talend/java/jdk21` |
 | Tomcat 11.0.29 | `/opt/talend/tac/apache-tomcat-11.0.29`, symlink `/opt/talend/tac/tomcat` |
 | TAC web application | `/opt/talend/tac/tomcat/webapps/ROOT`, at `http://localhost:8080/` |
+| PostgreSQL JDBC driver | `WEB-INF/lib/postgresql-42.7.14.jar`, copy kept in `/opt/talend/tac/drivers` |
 | systemd service | `/etc/systemd/system/talend-tac.service` (`talend:talend`) |
 
 Everything is under `/opt/talend` (volume `tac_app`) and `/etc/systemd/system`
@@ -319,6 +320,75 @@ chown -R talend:talend $TAC_HOME
 
 > **Re-deploying overwrites `configuration.properties`.** Back it up first:
 > `cp $CATALINA_HOME/webapps/ROOT/WEB-INF/classes/configuration.properties /opt/talend/tac/`
+
+### 4.3 PostgreSQL JDBC driver
+
+TAC reaches its database on `vm_db` through the PostgreSQL JDBC driver (pgJDBC).
+Talend expects it in the TAC application's `WEB-INF/lib`.
+(`scripts/vm_tac/install_jdbc_postgresql.sh` does this step on its own, and
+`install_tac.sh` runs it after each deployment.)
+
+```bash
+PG_JDBC_VERSION=${TAC_JDBC_PG_VERSION:-42.7.14}
+JAR=postgresql-$PG_JDBC_VERSION.jar
+JAR_URL=https://repo1.maven.org/maven2/org/postgresql/postgresql/$PG_JDBC_VERSION/$JAR
+```
+
+* `TAC_JDBC_PG_VERSION` comes from `.env` (42.7.14, the latest release when this was
+  written). The 42.x driver works with every supported PostgreSQL version, 18 included,
+  and needs Java 8 or later.
+* Maven Central is the official download location for the driver.
+
+Download and check:
+
+```bash
+curl -fSL -o $WORK/$JAR $JAR_URL
+echo "$(curl -fsSL $JAR_URL.sha1)  $WORK/$JAR" | sha1sum -c
+```
+
+* Maven Central publishes a **SHA-1** checksum next to each file (`.sha1`, the hash only).
+  Expect `OK`.
+* **Offline:** copy `postgresql-42.7.14.jar` into the Windows binaries folder and use
+  `cp /opt/binary/$JAR $WORK/` instead of the download.
+
+```bash
+unzip -tqq $WORK/$JAR && unzip -l $WORK/$JAR org/postgresql/Driver.class
+```
+
+* `unzip -t` tests the jar (a jar is a zip file): it fails on a truncated or corrupted
+  download. The second command must list `org/postgresql/Driver.class`, the class TAC loads.
+
+Keep a copy in the persisted volume:
+
+```bash
+install -d -o talend -g talend -m 0755 $TAC_HOME/drivers
+install -o talend -g talend -m 0644 $WORK/$JAR $TAC_HOME/drivers/$JAR
+```
+
+* `install` copies the file and sets its owner and permissions in one command.
+* `/opt/talend/tac/drivers` survives container recreates. **Each redeploy of the war
+  (4.2) recreates `WEB-INF/lib` and removes the driver**, so you can copy it back from
+  here without downloading it again.
+
+Install it into TAC:
+
+```bash
+ls $CATALINA_HOME/webapps/ROOT/WEB-INF/lib/ | grep -i postgresql
+```
+
+* If the war already ships a PostgreSQL driver (another `postgresql-*.jar`), remove it:
+  `rm $CATALINA_HOME/webapps/ROOT/WEB-INF/lib/postgresql-<other version>.jar`. Two driver
+  versions in the same classpath make the version actually used unpredictable.
+
+```bash
+install -o talend -g talend -m 0644 $TAC_HOME/drivers/$JAR $CATALINA_HOME/webapps/ROOT/WEB-INF/lib/$JAR
+```
+
+* Tomcat reads the jars in `WEB-INF/lib` when the application starts. When you are
+  following this guide, TAC starts in Step 5. On a TAC that is already running,
+  restart it: `systemctl restart talend-tac`.
+* In the TAC configuration page: driver class `org.postgresql.Driver`,
+  URL `jdbc:postgresql://vm-db:5432/talend_tac`.
 
 ---
 

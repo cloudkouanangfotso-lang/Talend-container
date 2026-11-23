@@ -9,6 +9,7 @@
 #    3. Install Apache Tomcat 11.0.29      -> /opt/talend/tac/apache-tomcat-11.0.29
 #    4. systemd service (User/Group=talend) -> /etc/systemd/system/talend-tac.service
 #    5. Deploy the TAC war as ROOT application (http://<host>:8080/)
+#       + PostgreSQL JDBC driver in WEB-INF/lib (install_jdbc_postgresql.sh)
 #
 #  Everything is installed under /opt/talend (persisted volume tac_app), so
 #  the installation survives "docker compose down / up".
@@ -18,11 +19,13 @@
 #     bash /opt/scripts/vm_tac/install_tac.sh            # install + start
 #     bash /opt/scripts/vm_tac/install_tac.sh --no-start # install + enable only
 #     bash /opt/scripts/vm_tac/install_tac.sh --force    # reinstall Java/Tomcat
+#     bash /opt/scripts/vm_tac/install_tac.sh --skip-jdbc  # no PostgreSQL JDBC driver
 #
 #  Offline mode: put the archives in the binaries folder (/opt/binary), they are
 #  used instead of downloading:
 #     OpenJDK21U-jdk_x64_linux_hotspot_*.tar.gz
 #     apache-tomcat-11.0.29.tar.gz
+#     postgresql-42.7.14.jar
 #
 #  All variables below can be overridden from the environment, e.g.
 #     TAC_XMX=4g bash /opt/scripts/vm_tac/install_tac.sh
@@ -59,10 +62,12 @@ TOMCAT_URL="${TOMCAT_URL:-https://archive.apache.org/dist/tomcat/tomcat-11/v${TO
 
 FORCE=false
 START=true
+INSTALL_JDBC=true
 for arg in "$@"; do
   case "$arg" in
     --force)    FORCE=true ;;
     --no-start) START=false ;;
+    --skip-jdbc) INSTALL_JDBC=false ;;
     -h|--help)  sed -n '2,32p' "$0"; exit 0 ;;
     *) echo "Unknown option: $arg" >&2; exit 2 ;;
   esac
@@ -229,6 +234,15 @@ install -d "${CATALINA_HOME}/webapps/ROOT"
 unzip -q "${wars[0]}" -d "${CATALINA_HOME}/webapps/ROOT"
 chown -R "${TAC_USER}:${TAC_GROUP}" "${TAC_HOME}"
 info "Deployed to ${CATALINA_HOME}/webapps/ROOT"
+
+# PostgreSQL JDBC driver: the redeploy above recreated WEB-INF/lib, so it is
+# installed again each time (from the persisted copy in ${TAC_HOME}/drivers).
+if [[ "${INSTALL_JDBC}" == true ]]; then
+  TAC_USER="${TAC_USER}" TAC_GROUP="${TAC_GROUP}" TAC_HOME="${TAC_HOME}" \
+  TOMCAT_LINK="${TOMCAT_LINK}" WEBAPP_DIR="${CATALINA_HOME}/webapps/ROOT" \
+  BINARY_PATH="${BINARY_PATH}" SERVICE_NAME="${SERVICE_NAME}" \
+    bash "$(dirname "$(readlink -f "$0")")/install_jdbc_postgresql.sh" --no-restart
+fi
 
 # ----------------------------------------------------------------------------
 # 5. systemd service

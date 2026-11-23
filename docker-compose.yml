@@ -202,6 +202,7 @@ services:
     environment:
       <<: *common-env
       TAC_HOME: /opt/talend/tac
+      TAC_JDBC_PG_VERSION: ${TAC_JDBC_PG_VERSION:-42.7.14}
     ports:
       - "${HOST_BIND_IP:-0.0.0.0}:${HOST_PORT_TAC_HTTP:-8080}:8080"
       - "${HOST_BIND_IP:-0.0.0.0}:${HOST_PORT_TAC_HTTPS:-8443}:8443"

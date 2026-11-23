@@ -28,6 +28,7 @@ docs/vm_tac_manual_install.md <- the same TAC install, step by step, by hand
 docs/vm_db_manual_install.md  <- the same PostgreSQL 18 setup, step by step, by hand
 scripts/                <- installation scripts, mounted read-only at /opt/scripts
   vm_tac/install_tac.sh <- Java 21 + Tomcat 11.0.29 + systemd + TAC war as ROOT
+  vm_tac/install_jdbc_postgresql.sh <- PostgreSQL JDBC driver into TAC (called by install_tac.sh)
   vm_db/install_db.sh   <- PostgreSQL 18 + configuration + systemd + TAC database
 ```
 
@@ -123,6 +124,7 @@ docker exec -it vm_tac bash /opt/scripts/vm_tac/install_tac.sh
 | 2. `JAVA_HOME` + `PATH` for `talend` | block in `~talend/.profile` and `~talend/.bashrc` |
 | 3. Apache Tomcat 11.0.29 (SHA-512 checked) | `/opt/talend/tac/apache-tomcat-11.0.29` with symlink `/opt/talend/tac/tomcat`; default webapps removed; `bin/setenv.sh` (JAVA_HOME, heap) |
 | 4. TAC war from `$BINARY_PATH/$BINARY_TAC` | exploded as `webapps/ROOT`, so TAC answers on `http://localhost:8080/` |
+| 4b. PostgreSQL JDBC driver 42.7.14 (`TAC_JDBC_PG_VERSION`, SHA-1 checked) | `WEB-INF/lib/postgresql-42.7.14.jar` (any other `postgresql-*.jar` removed), copy in `/opt/talend/tac/drivers` |
 | 5. systemd | `/etc/systemd/system/talend-tac.service`, `User=talend`, `Group=talend`, enabled and started |
 
 Everything goes under `/opt/talend` (volume `tac_app`) and `/etc/systemd/system`
@@ -139,15 +141,27 @@ docker exec -it vm_tac bash /opt/scripts/vm_tac/install_tac.sh --no-start
 docker exec -it -e TAC_XMX=6g vm_tac bash /opt/scripts/vm_tac/install_tac.sh --force
 ```
 
+* `--skip-jdbc`: do not install the PostgreSQL JDBC driver.
 * `--no-start`: install and enable the service without starting it. `--force`:
   reinstall Java and Tomcat. The war is always redeployed, which **overwrites**
   `WEB-INF/classes/configuration.properties`, so back it up before re-running
   on a configured TAC.
 * Variables: `JAVA_MAJOR` (21), `TOMCAT_VERSION` (11.0.29), `TAC_HTTP_PORT` (8080),
   `TAC_XMS` (1g), `TAC_XMX` (4g), `SERVICE_NAME` (talend-tac), `TAC_USER`/`TAC_GROUP` (talend).
-* **Offline:** if `OpenJDK21U-jdk_x64_linux_hotspot_*.tar.gz` and/or
-  `apache-tomcat-11.0.29.tar.gz` are in the binaries folder, they are used
-  instead of downloading.
+* **Offline:** if `OpenJDK21U-jdk_x64_linux_hotspot_*.tar.gz`,
+  `apache-tomcat-11.0.29.tar.gz` and/or `postgresql-42.7.14.jar` are in the
+  binaries folder, they are used instead of downloading.
+
+PostgreSQL JDBC driver only (for example on a TAC that is already installed, or to
+change the driver version). It restarts TAC if it is running:
+
+```bash
+docker exec -it vm_tac bash /opt/scripts/vm_tac/install_jdbc_postgresql.sh
+```
+
+```bash
+docker exec -it -e PG_JDBC_VERSION=42.7.13 vm_tac bash /opt/scripts/vm_tac/install_jdbc_postgresql.sh --no-restart
+```
 
 Service management: `systemctl status|restart talend-tac`, logs with
 `journalctl -u talend-tac -f` and `/opt/talend/tac/tomcat/logs`.
