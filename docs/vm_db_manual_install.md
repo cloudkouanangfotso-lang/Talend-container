@@ -392,3 +392,51 @@ of this automatically and leaves the data alone.)
 
 > `shared_buffers`, `max_connections`, `listen_addresses` and `port` need a **restart**.
 > Changes to `pg_hba.conf` only need a **reload**.
+
+---
+
+## Troubleshooting: cluster `down` / service does not start
+
+`pg_lsclusters` showing `down` is **normal right after Step 3**: the cluster is created
+but not started yet. Go on to Step 5. It is a problem only if it still says `down`
+after Step 5, or after a container restart.
+
+### 1. Find the reason
+
+```bash
+systemctl status postgresql@18-main --no-pager
+```
+
+```bash
+journalctl -u postgresql@18-main -b --no-pager | tail -30
+```
+
+```bash
+tail -30 /var/log/postgresql/postgresql-18-main.log
+```
+
+```bash
+pg_ctlcluster 18 main start
+```
+
+* `pg_ctlcluster` starts the cluster outside systemd and prints the error directly
+  in the terminal. If it works, stop it again (`pg_ctlcluster 18 main stop`) and start
+  it with `systemctl start postgresql@18-main` so systemd manages it.
+
+### 2. Common causes
+
+| Message in the log | Cause | Fix |
+|---|---|---|
+| `could not open file … Permission denied`, `data directory … has wrong ownership` | The data or config folder belongs to another UID than `postgres` (for example, PostgreSQL was installed before the image got the fixed UID 1100) | `chown -R postgres:postgres /var/lib/postgresql /etc/postgresql /var/log/postgresql`, then `systemctl restart postgresql@18-main` |
+| `could not map anonymous shared memory` / `out of memory` | `shared_buffers` is larger than the memory available to the container (Docker Desktop / WSL limit) | Lower `shared_buffers` in `conf.d/10-talend.conf` (for example `256MB`), then restart |
+| `syntax error in file … 10-talend.conf` / `invalid value for parameter` | A typo in the configuration | Fix the line the log names, then restart |
+| `could not bind IPv4 address … Address already in use` | Another PostgreSQL already uses port 5432 in the container | `pg_lsclusters`, then stop or remove the other cluster |
+| `pg_lsclusters: command not found` | The container was recreated, so the binaries are gone | Run Step 2 again (see "After a container recreate") |
+
+### 3. Check that it is fixed
+
+```bash
+pg_lsclusters
+```
+
+Expected: `18  main  5432 online  postgres …`.

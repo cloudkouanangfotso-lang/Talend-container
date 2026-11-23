@@ -147,6 +147,7 @@ else
   info "Cluster created"
 fi
 pg_lsclusters
+info "(Status 'down' is normal here: the cluster is started by systemd in step 5/7.)"
 
 # ----------------------------------------------------------------------------
 # 4. Configuration
@@ -202,7 +203,11 @@ for _ in $(seq 1 30); do
   runuser -u postgres -- pg_isready -q -p "${PG_PORT}" && break
   sleep 1
 done
-runuser -u postgres -- pg_isready -p "${PG_PORT}"
+if ! runuser -u postgres -- pg_isready -p "${PG_PORT}"; then
+  systemctl --no-pager status "${PG_SERVICE}" || true
+  tail -n 20 "/var/log/postgresql/postgresql-${PG_VERSION}-${PG_CLUSTER}.log" 2>/dev/null || true
+  die "PostgreSQL did not start: see the service status and log above."
+fi
 systemctl --no-pager --lines=0 status "${PG_SERVICE}" || true
 
 # ----------------------------------------------------------------------------
@@ -231,6 +236,7 @@ fi
 # 7. Checks
 # ----------------------------------------------------------------------------
 log "7/7 Checks"
+pg_lsclusters
 psql_admin -At -c "SELECT 'server: ' || version()"
 psql_admin -At -c "SHOW data_checksums" | sed 's/^/    data_checksums: /'
 psql_admin -At -c "SHOW listen_addresses" | sed 's/^/    listen_addresses: /'
